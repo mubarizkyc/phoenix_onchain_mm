@@ -12,9 +12,9 @@ use bytemuck::{Pod, Zeroable, checked::try_from_bytes};
 use pinocchio::{
     ProgramResult,
     account_info::AccountInfo,
-    default_allocator, default_panic_handler,
+    default_allocator,
     instruction::{Seed, Signer},
-    msg, no_allocator, program_entrypoint,
+    msg, program_entrypoint,
     program_error::ProgramError,
     pubkey::Pubkey,
     pubkey::find_program_address,
@@ -101,12 +101,7 @@ pub struct PhoenixStrategyState {
     pub price_improvement_behavior: u8,
     padding: [u8; 6],
 }
-fn load_header(info: &AccountInfo) -> Result<MarketHeader, ProgramError> {
-    let data = &info.try_borrow_data()?[8..];
-    let market_header = try_from_bytes::<MarketHeader>(&data).unwrap();
 
-    Ok(*market_header)
-}
 #[derive(BorshDeserialize, BorshSerialize, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SelfTradeBehavior {
     Abort,
@@ -345,12 +340,6 @@ impl RestingOrder for FIFORestingOrder {
     }
 }
 
-pub fn load_with_dispatch<'a>(
-    market_size_params: &'a MarketSizeParams,
-    bytes: &'a [u8],
-) -> Result<MarketWrapper<'a, Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>, ProgramError> {
-    dispatch_market(market_size_params, bytes)
-}
 #[repr(C)]
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Zeroable, Pod)]
 pub struct TraderState {
@@ -442,13 +431,7 @@ impl<
         if addr == SENTINEL { None } else { Some(addr) }
     }
 }
-macro_rules! fifo_market {
-    ($num_bids:literal, $num_asks:literal, $num_seats:literal, $bytes:expr) => {
-        FIFOMarket::<Pubkey, $num_bids, $num_asks, $num_seats>::load_bytes($bytes)
-            .ok_or(ProgramError::InvalidInstructionData)?
-            as &dyn Market<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>
-    };
-}
+
 pub struct MarketWrapper<'a, MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket> {
     pub inner: &'a dyn Market<MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket>,
 }
@@ -462,39 +445,6 @@ impl<'a, MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket>
     }
 }
 
-fn dispatch_market<'a>(
-    market_size_params: &'a MarketSizeParams,
-    bytes: &'a [u8],
-) -> Result<MarketWrapper<'a, Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>, ProgramError> {
-    let market = match (
-        market_size_params.bids_size,
-        market_size_params.asks_size,
-        market_size_params.num_seats,
-    ) {
-        (512, 512, 128) => fifo_market!(512, 512, 128, bytes),
-        (512, 512, 1025) => fifo_market!(512, 512, 1025, bytes),
-        (512, 512, 1153) => fifo_market!(512, 512, 1153, bytes),
-        (1024, 1024, 128) => fifo_market!(1024, 1024, 128, bytes),
-        (1024, 1024, 2049) => fifo_market!(1024, 1024, 2049, bytes),
-        (1024, 1024, 2177) => fifo_market!(1024, 1024, 2177, bytes),
-        (2048, 2048, 128) => fifo_market!(2048, 2048, 128, bytes),
-        (2048, 2048, 4097) => fifo_market!(2048, 2048, 4097, bytes),
-        (2048, 2048, 4225) => fifo_market!(2048, 2048, 4225, bytes),
-        (4096, 4096, 128) => fifo_market!(4096, 4096, 128, bytes),
-        (4096, 4096, 8193) => fifo_market!(4096, 4096, 8193, bytes),
-        (4096, 4096, 8321) => fifo_market!(4096, 4096, 8321, bytes),
-        _ => {
-            //    phoenix_log!("Invalid parameters for market");
-            return Err(ProgramError::InvalidInstructionData);
-        }
-    };
-    Ok(MarketWrapper::<
-        Pubkey,
-        FIFOOrderId,
-        FIFORestingOrder,
-        OrderPacket,
-    >::new(market))
-}
 pub trait RestingOrder {
     fn size(&self) -> u64;
     fn last_valid_slot(&self) -> Option<u64>;
@@ -722,28 +672,20 @@ fn process_instruction(
         _ => return Err(ProgramError::InvalidInstructionData),
     }
 }
-
-//data
-/*
-pub struct StrategyParams {
-    pub quote_edge_in_bps: u64,
-    pub quote_size_in_quote_atoms: u64,
-    pub price_improvement_behavior: u8, //0 ->join,1->Dime,2->Ignore
-    pub post_only: u8,
-    padding: [u8; 6],
-}
-*/
 pub static PHOENIX_STRATEGY_SEED: &[u8] = b"phoniex_strategy";
+/*
+create a strategy account that will save our bot config
+*/
 pub fn initialize(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
-    let [phoniex_strategy, user, market, system_program] = accounts else {
+    let [phoenix_strategy_account, user, market, system_program] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
     let params = try_from_bytes::<StrategyParams>(&data).unwrap();
     let clock = Clock::get()?;
 
     let phoenix_strategy = PhoenixStrategyState {
-        trader: *user.key(),   //user
-        market: *market.key(), //market
+        trader: *user.key(),
+        market: *market.key(),
         bid_order_sequence_number: 0,
         bid_price_in_ticks: 0,
         initial_bid_size_in_base_lots: 0,
@@ -758,9 +700,7 @@ pub fn initialize(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
         price_improvement_behavior: params.price_improvement_behavior,
         padding: [0; 6],
     };
-
     //create phoniex strategy account
-
     let space = core::mem::size_of::<PhoenixStrategyState>();
     let lamports = Rent::get()?.minimum_balance(space);
     let seeds: [&[u8]; 2] = [b"phoniex_strategy".as_ref(), user.key().as_ref()];
@@ -778,14 +718,14 @@ pub fn initialize(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
 
     CreateAccount {
         from: user,
-        to: phoniex_strategy,
+        to: phoenix_strategy_account,
         space: core::mem::size_of::<PhoenixStrategyState>() as u64,
         owner: &crate::ID,
         lamports,
     }
     .invoke_signed(&signers)?;
 
-    let mut dst = accounts[0].try_borrow_mut_data()?;
+    let mut dst = phoenix_strategy_account.try_borrow_mut_data()?;
     let bytes = unsafe {
         core::slice::from_raw_parts(
             (&phoenix_strategy as *const PhoenixStrategyState) as *const u8,
@@ -793,15 +733,8 @@ pub fn initialize(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
         )
     };
     dst[..size_of::<PhoenixStrategyState>()].copy_from_slice(bytes);
-
     Ok(())
 }
-/*
-pub struct OrderParams {
-    pub fair_price_in_quote_atoms_per_raw_base_unit: [u8; 8],
-    pub strategy_params: StrategyParams,
-}
-*/
 pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     let [
         phoniex_strategy,
@@ -819,36 +752,26 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-    let params = try_from_bytes::<OrderParams>(&data).unwrap();
-    let strategy_data = phoniex_strategy.try_borrow_data()?;
-    let mut phoenix_strategy = *try_from_bytes::<PhoenixStrategyState>(&strategy_data).unwrap();
-
     let clock = Clock::get()?;
+    //OrderParams
+    let params = try_from_bytes::<OrderParams>(&data).unwrap();
+    //Strategy Account
+    let mut phoenix_strategy =
+        *try_from_bytes::<PhoenixStrategyState>(&phoniex_strategy.try_borrow_data()?).unwrap();
+    //track last update
     phoenix_strategy.last_update_slot = clock.slot;
     phoenix_strategy.last_update_unix_timestamp = clock.unix_timestamp;
 
     let edge = params.strategy_params.quote_edge_in_bps;
     if edge > 0 {
-        phoenix_strategy.quote_edge_in_bps = edge;
+        phoenix_strategy.quote_edge_in_bps = edge; //how far from mid-price to quote
     }
-    phoenix_strategy.quote_size_in_quote_atoms = params.strategy_params.quote_size_in_quote_atoms;
+    phoenix_strategy.quote_size_in_quote_atoms = params.strategy_params.quote_size_in_quote_atoms; //order size
     phoenix_strategy.post_only = params.strategy_params.post_only;
-    phoenix_strategy.price_improvement_behavior = params.strategy_params.price_improvement_behavior;
-
+    phoenix_strategy.price_improvement_behavior = params.strategy_params.price_improvement_behavior; //undercut competitors or stay passive.
     let market_data = pool.try_borrow_data()?;
-    let header_bytes = &market_data[..core::mem::size_of::<MarketHeader>()];
-    let market_header = bytemuck::try_from_bytes::<MarketHeader>(header_bytes)
-        .map_err(|_| ProgramError::InvalidAccountData)?;
-
-    let (_, market_bytes) = market_data.split_at(core::mem::size_of::<MarketHeader>());
-
-    let market = load_with_dispatch(&market_header.market_size_params, market_bytes)
-        .map_err(|_| {
-            msg!("Failed to deserialize market");
-            ProgramError::InvalidInstructionData
-        })?
-        .inner;
-
+    let market_header = deserialize_market_header(pool)?;
+    let market = deserialize_market(&market_data, &market_header.market_size_params)?;
     // Compute quote prices
     let mut bid_price_in_ticks = get_bid_price_in_ticks(
         params.fair_price_in_quote_atoms_per_raw_base_unit,
@@ -863,7 +786,6 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     );
 
     // Returns the best bid and ask prices that are not placed by the trader
-
     let trader_index = market.get_trader_index(user.key()).unwrap_or(u32::MAX) as u64;
     let (best_bid, best_ask) = get_best_bid_and_ask(market, trader_index);
     let price_improvement_behavior =
@@ -936,7 +858,7 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     })
     .collect::<Vec<FIFOOrderId>>();
     // Drop reference prior to invoking
-    //    drop(market_data);
+    drop(market_data);
     // Cancel the old orders
     if !orders_to_cancel.is_empty() {
         //cpi to create_cancel_multiple_orders_by_id_with_free_funds_instruction
@@ -1051,14 +973,8 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
         }
     }
 
-    let market_data = &pool.try_borrow_data()?;
-    let (_, market_bytes) = market_data.split_at(std::mem::size_of::<MarketHeader>());
-    let market = load_with_dispatch(&market_header.market_size_params, market_bytes)
-        .map_err(|_| {
-            msg!("Failed to deserialize market");
-            ProgramError::InvalidInstructionData
-        })?
-        .inner;
+    let market_data = pool.try_borrow_data()?;
+    let market = deserialize_market(&market_data, &market_header.market_size_params)?;
 
     for order_id in order_ids.iter() {
         let side = Side::from_order_sequence_number(order_id.order_sequence_number);
