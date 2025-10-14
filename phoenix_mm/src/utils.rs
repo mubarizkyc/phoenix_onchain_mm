@@ -1,16 +1,13 @@
-use crate::entrypoint::*;
-use borsh::{BorshDeserialize, BorshSerialize};
+use crate::types::*;
+use borsh::BorshSerialize;
 use pinocchio::{
     ProgramResult,
     account_info::AccountInfo,
     cpi::slice_invoke,
-    default_panic_handler,
     instruction::{AccountMeta, Instruction},
-    msg, no_allocator, program_entrypoint,
+    msg,
     program_error::ProgramError,
     pubkey::Pubkey,
-    sysvars::Sysvar,
-    sysvars::clock::Clock,
 };
 use sokoban::ZeroCopy;
 pub const PHONIEX_PROGRAM_ID: [u8; 32] = [
@@ -233,4 +230,28 @@ pub fn create_new_multiple_order_with_custom_token_accounts(
             &token_program,
         ],
     )
+}
+
+pub fn get_bid_price_in_ticks(
+    fair_price_in_quote_atoms_per_raw_base_unit: u64,
+    header: &MarketHeader,
+    edge_in_bps: u64,
+) -> u64 {
+    let fair_price_in_ticks = fair_price_in_quote_atoms_per_raw_base_unit
+        * header.raw_base_units_per_base_unit as u64
+        / header.tick_size_in_quote_atoms_per_base_unit;
+    let edge_in_ticks = edge_in_bps * fair_price_in_ticks / 10_000;
+    fair_price_in_ticks - edge_in_ticks
+}
+
+pub fn get_ask_price_in_ticks(
+    fair_price_in_quote_atoms_per_raw_base_unit: u64,
+    header: &MarketHeader,
+    edge_in_bps: u64,
+) -> u64 {
+    let fair_price_in_ticks = fair_price_in_quote_atoms_per_raw_base_unit
+        * header.raw_base_units_per_base_unit as u64
+        / header.tick_size_in_quote_atoms_per_base_unit;
+    let edge_in_ticks = edge_in_bps * fair_price_in_ticks / 10_000;
+    fair_price_in_ticks + edge_in_ticks
 }
