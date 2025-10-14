@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target
+**/target
+
+# Lock files (optional for workspaces)
+Cargo.lock
+**/Cargo.lock
+
+# Solana artifacts
+*.so
+*.json
+
+# Misc
+.DS_Store

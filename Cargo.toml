@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "phoenix_mm",   # your on-chain program
+    "client",       # your Rust client
+]
