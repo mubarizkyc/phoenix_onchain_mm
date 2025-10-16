@@ -193,7 +193,7 @@ pub struct StrategyParams {
     pub quote_size_in_quote_atoms: u64,
     pub price_improvement_behavior: u8, //0 ->join,1->Dime,2->Ignore
     pub post_only: u8,
-    padding: [u8; 6],
+    pub padding: [u8; 6],
 }
 #[repr(C, packed)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -243,12 +243,12 @@ impl FIFOOrderId {
 #[derive(Default, PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Zeroable, Pod)]
 #[repr(transparent)]
 pub struct QuoteLots {
-    inner: u64,
+    pub inner: u64,
 }
 #[derive(Default, PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Zeroable, Pod)]
 #[repr(transparent)]
 pub struct BaseLots {
-    inner: u64,
+    pub inner: u64,
 }
 
 #[repr(C)]
@@ -377,6 +377,9 @@ impl<
         let addr = self.traders.get_addr(trader_id);
         if addr == SENTINEL { None } else { Some(addr) }
     }
+    fn get_registered_traders(&self) -> &dyn OrderedNodeAllocatorMap<MarketTraderId, TraderState> {
+        &self.traders as &dyn OrderedNodeAllocatorMap<MarketTraderId, TraderState>
+    }
 }
 
 pub struct MarketWrapper<'a, MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket> {
@@ -415,6 +418,7 @@ pub trait Market<
     ) -> &dyn OrderedNodeAllocatorMap<MarketOrderId, MarketRestingOrder>;
     fn get_trader_index(&self, trader: &MarketTraderId) -> Option<u32>;
     fn get_base_lots_per_base_unit(&self) -> u64;
+    fn get_registered_traders(&self) -> &dyn OrderedNodeAllocatorMap<MarketTraderId, TraderState>;
 }
 pub fn get_best_bid_and_ask(
     market: &dyn Market<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>,

@@ -47,7 +47,7 @@ fn process_instruction(
         _ => return Err(ProgramError::InvalidInstructionData),
     }
 }
-pub static PHOENIX_STRATEGY_SEED: &[u8] = b"phoniex_strategy";
+pub static PHOENIX_STRATEGY_SEED: &[u8] = b"phoenix_strategy";
 /*
 create a strategy account that will save our bot config
 */
@@ -78,7 +78,7 @@ pub fn initialize(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     //create phoniex strategy account
     let space = core::mem::size_of::<PhoenixStrategyState>();
     let lamports = Rent::get()?.minimum_balance(space);
-    let seeds: [&[u8]; 2] = [b"phoniex_strategy".as_ref(), user.key().as_ref()];
+    let seeds: [&[u8]; 2] = [b"phoenix_strategy".as_ref(), user.key().as_ref()];
 
     let bump = find_program_address(&seeds, &crate::ID).1;
 
@@ -111,6 +111,7 @@ pub fn initialize(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     Ok(())
 }
 pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
+    let mut logger = Logger::<100>::default();
     let [
         phoniex_strategy,
         pool,
@@ -130,6 +131,7 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     let clock = Clock::get()?;
     //OrderParams
     let params = try_from_bytes::<OrderParams>(&data).unwrap();
+
     //Strategy Account
     let mut phoenix_strategy =
         *try_from_bytes::<PhoenixStrategyState>(&phoniex_strategy.try_borrow_data()?).unwrap();
@@ -169,6 +171,18 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     // Returns the best bid and ask prices that are not placed by the trader
     let trader_index = market.get_trader_index(user.key()).unwrap_or(u32::MAX) as u64;
     let (best_bid, best_ask) = get_best_bid_and_ask(market, trader_index);
+    logger.append("Current Market: ");
+    logger.log();
+    logger.clear();
+    logger.append("Best Bid: ");
+    logger.append_with_args(best_bid, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
+    logger.append("Best Ask: ");
+    logger.append_with_args(best_ask, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
+
     let price_improvement_behavior =
         PriceImprovementBehavior::from_u8(phoenix_strategy.price_improvement_behavior);
     match price_improvement_behavior {
@@ -191,11 +205,44 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     // Compute quote amounts in base lots
     let size_in_quote_lots =
         phoenix_strategy.quote_size_in_quote_atoms / market_header.quote_lot_size;
+    logger.append_with_args(size_in_quote_lots, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
+    logger.append_with_args(
+        market.get_base_lots_per_base_unit(),
+        &[Argument::Precision(0)],
+    );
+    logger.log();
+    logger.clear();
+    logger.append_with_args(market.get_tick_size(), &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
+    logger.append_with_args(bid_price_in_ticks, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
+    logger.append_with_args(ask_price_in_ticks, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
     //size_in_base_lots=(quote_lots*base_lots+per_unit)/(price_in_ticks*tick_size);
-    let bid_size_in_base_lots = size_in_quote_lots * market.get_base_lots_per_base_unit()
-        / (bid_price_in_ticks * market.get_tick_size());
-    let ask_size_in_base_lots = size_in_quote_lots * market.get_base_lots_per_base_unit()
-        / (ask_price_in_ticks * market.get_tick_size());
+    let bid_size_in_base_lots =
+        size_in_quote_lots * market.get_base_lots_per_base_unit() / (bid_price_in_ticks);
+    let ask_size_in_base_lots =
+        size_in_quote_lots * market.get_base_lots_per_base_unit() / (ask_price_in_ticks);
+    logger.append("Our Market: ");
+    logger.log();
+    logger.clear();
+    logger.append_with_args(bid_size_in_base_lots, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
+    logger.append_with_args(bid_price_in_ticks, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
+    logger.append_with_args(ask_price_in_ticks, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
+    logger.append_with_args(ask_size_in_base_lots, &[Argument::Precision(0)]);
+    logger.log();
+    logger.clear();
     let mut update_bid = true;
     let mut update_ask = true;
     let orders_to_cancel = [
@@ -232,12 +279,21 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
                 return None;
             }
             // The order has been partially filled or reduced
+            logger.append("Found partially filled resting order with sequence number: ");
+            logger.append_with_args(order_id.order_sequence_number, &[Argument::Precision(0)]);
+            logger.log();
+            logger.clear();
             return Some(*order_id);
         }
+        logger.append("Failed to found resting order with sequence number: ");
+        logger.append_with_args(order_id.order_sequence_number, &[Argument::Precision(0)]);
+        logger.log();
+        logger.clear();
         // The order has been fully filled
         None
     })
     .collect::<Vec<FIFOOrderId>>();
+
     // Drop reference prior to invoking
     drop(market_data);
     // Cancel the old orders
@@ -265,6 +321,7 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     update_bid &= bid_price_in_ticks > 1 && bid_size_in_base_lots > 0;
     update_ask &= ask_price_in_ticks < u64::MAX && ask_size_in_base_lots > 0;
     let client_order_id = u128::from_le_bytes(accounts[2].key()[..16].try_into().unwrap());
+
     if !update_ask && !update_bid && orders_to_cancel.is_empty() {
         msg!("No orders to update");
         return Ok(());
@@ -369,30 +426,22 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
                     phoenix_strategy.ask_price_in_ticks = order_id.price_in_ticks.inner;
                     phoenix_strategy.ask_order_sequence_number = order_id.order_sequence_number;
                     phoenix_strategy.initial_ask_size_in_base_lots = order.num_base_lots;
+                    msg!("Placed Ask Order with sequence number: ");
                 }
                 Side::Bid => {
                     phoenix_strategy.bid_price_in_ticks = order_id.price_in_ticks.inner;
                     phoenix_strategy.bid_order_sequence_number = order_id.order_sequence_number;
                     phoenix_strategy.initial_bid_size_in_base_lots = order.num_base_lots;
+                    msg!("Placed Ask Order with sequence number: ");
                 }
             }
         } else {
             msg!("Order not found ");
         }
+        logger.append_with_args(order_id.order_sequence_number, &[Argument::Precision(0)]);
+        logger.log();
+        logger.clear()
     }
+
     Ok(())
 }
-/*
-let mut logger = Logger::<100>::default();
-logger.append("expected size: ");
-logger.append_with_args(
-    core::mem::size_of::<MarketHeader>(),
-    &[Argument::Precision(0)],
-);
-logger.log();
-logger.clear();
-logger.append("got size: ");
-logger.append_with_args(market_data.len(), &[Argument::Precision(0)]);
-logger.log();
-logger.clear();
-*/

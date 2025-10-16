@@ -5,6 +5,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+phoenix_mm = { path = "../phoenix_mm" }
+bytemuck = { version = "1.16.1", features = ["derive", "min_const_generics"] }
 solana-sdk = "2.1.0"
 solana-client = "2.1.0"
 solana-rpc-client = "2.1.0"
