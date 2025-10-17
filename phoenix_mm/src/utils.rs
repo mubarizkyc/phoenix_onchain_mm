@@ -21,13 +21,11 @@ macro_rules! fifo_market {
             as &dyn Market<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>
     };
 }
-pub fn deserialize_market_header(info: &AccountInfo) -> Result<MarketHeader, ProgramError> {
-    let data = info.try_borrow_data()?;
-    let header = bytemuck::try_from_bytes::<MarketHeader>(&data[..size_of::<MarketHeader>()])
-        .map_err(|_| {
-            msg!("Failed to parse Phoenix market header");
-            ProgramError::InvalidInstructionData
-        })?;
+pub fn deserialize_market_header(data: &[u8]) -> Result<MarketHeader, ProgramError> {
+    let header = bytemuck::try_from_bytes::<MarketHeader>(data).map_err(|_| {
+        msg!("Failed to parse Phoenix market header");
+        ProgramError::InvalidInstructionData
+    })?;
 
     Ok(*header)
 }

@@ -147,7 +147,7 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     phoenix_strategy.post_only = params.strategy_params.post_only;
     phoenix_strategy.price_improvement_behavior = params.strategy_params.price_improvement_behavior; //undercut competitors or stay passive.
     let market_data = pool.try_borrow_data()?;
-    let market_header = deserialize_market_header(pool)?;
+    let market_header = deserialize_market_header(&market_data[..size_of::<MarketHeader>()])?;
     let market = deserialize_market(&market_data, &market_header.market_size_params)?;
     // Compute quote prices
     //each phoniex market has a tick size (min inc allowed )

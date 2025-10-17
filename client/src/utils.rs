@@ -7,7 +7,9 @@ use phoenix_mm::types::*;
 use phoenix_mm::utils::*;
 use reqwest::Client;
 use serde::Deserialize;
+use solana_client::rpc_client;
 use solana_client::rpc_client::RpcClient;
+use solana_sdk::client;
 use solana_sdk::{
     account::Account,
     instruction::{AccountMeta, Instruction},
@@ -28,6 +30,43 @@ use spl_token::state::Account as TokenAccount;
 use std::collections::BTreeMap;
 use std::marker;
 use std::time::Duration;
+//Coin base api structure
+#[derive(Deserialize, Debug)]
+pub struct PriceData {
+    pub data: PriceInner,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct PriceInner {
+    pub amount: String,
+    base: String,
+    currency: String,
+}
+/*
+pub fn get_seat_manager_seeds(
+    market: &Pubkey,
+    seat_manager: &Pubkey,
+    program_id: &Pubkey,
+) -> Vec<Vec<u8>> {
+    let mut seeds = vec![market.to_bytes().to_vec()];
+    let (seat_manager_key, bump) = Pubkey::find_program_address(
+        seeds
+            .iter()
+            .map(|seed| seed.as_slice())
+            .collect::<Vec<&[u8]>>()
+            .as_slice(),
+        program_id,
+    );
+    seeds.push(vec![bump]);
+
+    if seat_manager_key == *seat_manager {
+        Ok(seeds)
+    } else {
+
+        //invlaid ix data
+    }
+}
+*/
 pub unsafe fn to_bytes<T>(data: &T, len: usize) -> &[u8] {
     core::slice::from_raw_parts(data as *const T as *const u8, len)
 }
@@ -61,6 +100,15 @@ pub fn get_dummy_token_account(
         rent_epoch: 0,
     })
 }
+pub fn hydrate_with_mainnet(rpc: &RpcClient, litesvm: &mut LiteSVM, addresses: Vec<Pubkey>) {
+    let mainnet_accounts = rpc.get_multiple_accounts(&addresses).unwrap();
+
+    for (address, maybe_account) in addresses.iter().zip(mainnet_accounts.into_iter()) {
+        if let Some(account) = maybe_account {
+            litesvm.set_account(*address, account).unwrap();
+        }
+    }
+}
 pub async fn execute_transaction(
     litesvm: &mut LiteSVM,
     accounts: Vec<AccountMeta>,
@@ -85,4 +133,17 @@ pub async fn execute_transaction(
     println!("{:#?}", reuslt.logs);
     litesvm.expire_blockhash();
     Ok(())
+}
+//hardcoded for sol/usdc for now
+pub async fn get_price(client: &Client) -> u64 {
+    let resp = client
+        .get("https://api.coinbase.com/v2/prices/SOL-USD/spot")
+        .send()
+        .await
+        .unwrap()
+        .json::<PriceData>()
+        .await
+        .unwrap();
+    let price_f64: f64 = resp.data.amount.parse().unwrap();
+    (price_f64).round() as u64
 }

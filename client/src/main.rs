@@ -1,78 +1,33 @@
 pub mod utils;
+use std::vec;
+
 use crate::utils::*;
-use anyhow::{Error, Result};
-use bytemuck::{Pod, Zeroable};
-use core::num;
 use litesvm::LiteSVM;
-use phoenix_mm::types::*;
-use phoenix_mm::utils::*;
+use phoenix_mm::{
+    types::*,
+    utils::{deserialize_market, deserialize_market_header},
+};
 use reqwest::Client;
-use serde::Deserialize;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
-    account::Account,
-    instruction::{AccountMeta, Instruction},
-    message::v0::Message,
-    program_pack::Pack,
-    pubkey,
-    pubkey::Pubkey,
-    signature::Keypair,
-    signer::{EncodableKey, Signer},
+    account::{self, Account},
+    instruction::AccountMeta,
+    pubkey::{self, Pubkey},
     system_program,
-    sysvar::{Sysvar, clock::Clock},
-    transaction::VersionedTransaction,
 };
-use spl_associated_token_account::{
-    get_associated_token_address, get_associated_token_address_with_program_id,
-};
-use spl_token::state::Account as TokenAccount;
-use std::collections::BTreeMap;
-use std::marker;
-use std::time::Duration;
-pub const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("6RavfKEf7qqJLXmmwUWVBkaN56pZ71JtqCFfS99bHrpu");
+use spl_associated_token_account::get_associated_token_address;
+const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("6RavfKEf7qqJLXmmwUWVBkaN56pZ71JtqCFfS99bHrpu");
 const PHOENIX: Pubkey = pubkey!("PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY");
 const PHOENIX_SEAT_MANAGER: Pubkey = pubkey!("PSMxQbAoDWDbvd9ezQJgARyq6R9L5kJAasaLDVcZwf1");
 const PHOENIX_LOG_AUTH: Pubkey = pubkey!("7aDTsspkQNGKmrexAN7FLx9oxU3iPczSSvHNggyuqYkR");
 const WALLET_PATH: &str = "/home/mubariz/wallnuts/mainnet-keypair.json";
-pub const WALLET: Pubkey = pubkey!("5BvrQfDzwjFFjpaAys2KA1a7GuuhLXKJoCWykhsoyHet"); //replace with your actual wallet
+const WALLET: Pubkey = pubkey!("5BvrQfDzwjFFjpaAys2KA1a7GuuhLXKJoCWykhsoyHet"); //replace with your actual wallet
 const SOL_BALANCE: u64 = 1000 * 1_000_000_000; //hehehe
 const USDC_BALANCE: u64 = 10_000 * 1_000_000;
 
-#[derive(Deserialize, Debug)]
-struct PriceData {
-    data: PriceInner,
-}
-
-#[derive(Deserialize, Debug)]
-struct PriceInner {
-    amount: String,
-    base: String,
-    currency: String,
-}
-
-const MAX_DMMS: u64 = 128;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Zeroable, Pod)]
-pub struct SeatManager {
-    pub market: Pubkey,
-    pub authority: Pubkey,
-    pub successor: Pubkey,
-    pub num_makers: u64,
-    pub _header_padding: [u64; 11],
-    pub designated_market_makers: [Pubkey; MAX_DMMS as usize],
-    pub _dmm_padding: [u128; MAX_DMMS as usize],
-}
-impl SeatManager {
-    pub fn contains(&self, trader: &Pubkey) -> bool {
-        self.designated_market_makers
-            .iter()
-            .take(self.num_makers as usize)
-            .any(|dmm| dmm == trader)
-    }
-}
 #[tokio::main]
 async fn main() {
+    let client = Client::new();
     let mut litesvm = LiteSVM::new().with_blockhash_check(true);
     let rpc = RpcClient::new("https://api.mainnet-beta.solana.com");
     let pool = Pubkey::from_str_const("4DoNfFBfF7UokCC2FQzriy7yHK6DY6NVdYpuekQ5pRgg"); //phoenix sol-usdc pool
@@ -102,24 +57,7 @@ async fn main() {
     let seat_deposit_collector =
         Pubkey::find_program_address(&[pool.as_ref(), b"deposit".as_ref()], &PHOENIX_SEAT_MANAGER)
             .0;
-    //fetching accounts from mainnet to hydrate svm
-    let mut addresses = vec![
-        WALLET,
-        pool,
-        seat_manager,
-        seat_deposit_collector,
-        base_mint,
-        quote_mint,
-        base_vault,
-        quote_vault,
-    ];
-    let mut mainnet_accounts = rpc.get_multiple_accounts(&addresses).unwrap();
 
-    for (address, maybe_account) in addresses.iter().zip(mainnet_accounts.clone().into_iter()) {
-        if let Some(account) = maybe_account {
-            litesvm.set_account(*address, account);
-        }
-    }
     //dummy token accounts
     litesvm.set_account(base_account_address, base_account);
     litesvm.set_account(quote_account_address, quote_account);
@@ -128,96 +66,147 @@ async fn main() {
     litesvm.add_program_from_file(PROGRAM_ID, "../target/deploy/phoenix_mm.so");
     litesvm.add_program_from_file(PHOENIX, "../phoenix.so");
     litesvm.add_program_from_file(PHOENIX_SEAT_MANAGER, "../phoniex_seat_manager.so");
+    let mut accounts: Vec<AccountMeta> = vec![];
+    let mut market_account = rpc.get_account(&pool).unwrap();
+    let mut market_data: &mut Vec<u8> = market_account.data;
+    let (market_header_bytes, market_bytes) =
+        market_account.data.split_at(size_of::<MarketHeader>());
+    let market_size_params = deserialize_market_header(market_header_bytes)
+        .unwrap()
+        .market_size_params;
+    let market = deserialize_market(&market_account.data, &market_size_params).unwrap();
+    let mut registered_traders = market.get_registered_traders();
+    if !registered_traders.contains(&WALLET.to_bytes()) {
+        registered_traders
+            .insert(WALLET.to_bytes(), TraderState::default())
+            .unwrap();
+    }
+    let pool_account = Account {
+        lamports: litesvm.minimum_balance_for_rent_exemption(market_account.data.len()), //size might be change after insertion
+        data: market_account.data,
+        owner: market_account.owner,
+        executable: market_account.executable,
+        rent_epoch: market_account.rent_epoch,
+    };
+    /*
+    A special kind of manipulation to create a seat on market that is owned by seat_program + no evict of seat is needed
+              undestand how to manipulate a market data to get a seat
+            get seat_manager accounts,
+            make sure seat manager belongs to market
+        get seat manager seeds for the market
+      1:  invoke request_seat_authorized_instruction (seeds will be usefull here)
+        handlign of request seat authorized:
+          let (seat_address, bump) = get_seat_address(market_key, trader);
+        assert_with_msg(
+            &seat_address == seat.key,
+            ProgramError::InvalidAccountData,
+            "Invalid seat address",
+        )?;
+        let space = size_of::<Seat>();
+        let seeds = vec![
+            b"seat".to_vec(),
+            market_key.as_ref().to_vec(),
+            trader.as_ref().to_vec(),
+            vec![bump],
+        ];
+        create_account(
+            payer,
+            seat,
+            system_program,
+            &crate::id(),
+            &Rent::get()?,
+            space as u64,
+            seeds,
+        )?;
+        let mut seat_bytes = seat.try_borrow_mut_data()?;
+        *Seat::load_mut_bytes(&mut seat_bytes).ok_or(ProgramError::InvalidAccountData)? =
+            Seat::new_init(*market_key, *trader)?;
+             pub fn new_init(market: Pubkey, trader: Pubkey) -> Result<Self, ProgramError> {
+            Ok(Self {
+                discriminant: get_discriminant::<Seat>()?,
+                market,
+                trader,
+                approval_status: SeatApprovalStatus::NotApproved as u64,
+                _padding: [0; 6],
+            })
+        }
 
+        //let see what happend after this tx
+
+    2:pay double ata rent to seat deposit collector
+        3:just edit seat data to change to approved seat
+
+
+               */
+    //Request a Seat from Phoniex Seat Manager Program
+    //necessary accounts from claim seat
+    /*
+           hydrate_with_mainnet(
+            &rpc,
+            &mut litesvm,
+            vec![
+                WALLET,
+                PHOENIX_LOG_AUTH,
+                pool,
+                seat_manager,
+                seat_deposit_collector,
+                base_mint,
+                quote_mint,
+                base_vault,
+                quote_vault,
+            ],
+        );
+        let mut accounts = vec![];
+        accounts.push(AccountMeta::new_readonly(PHOENIX, false));
+        accounts.push(AccountMeta::new_readonly(PHOENIX_LOG_AUTH, false));
+        accounts.push(AccountMeta::new(pool, false));
+        accounts.push(AccountMeta::new(seat_manager, false));
+        accounts.push(AccountMeta::new(seat_deposit_collector, false));
+        accounts.push(AccountMeta::new_readonly(WALLET, false));
+        accounts.push(AccountMeta::new(WALLET, true));
+        accounts.push(AccountMeta::new(seat, false));
+        accounts.push(AccountMeta::new_readonly(system_program::id(), false));
+        execute_transaction(&mut litesvm, accounts, vec![1u8], PHOENIX_SEAT_MANAGER).await;
+    */
     // ---InitalizeInstruction---
     //inital config
-    let quote_edge_in_bps: u64 = 2;
-    let quote_size_in_quote_atoms: u64 = 2 * 1_000_00;
-    //price_improvement_behavior: bot behaves when placing prices compared to what’s already on the orderbook.
-    let price_improvement_behavior: u8 = 0; //price improvment behaviour (0 ->join,1->Dime,2->Ignore)
-    let post_only: u8 = false as u8;
-
-    let mut accounts = vec![];
+    let initalize_params = StrategyParams {
+        quote_edge_in_bps: 2,
+        quote_size_in_quote_atoms: 500 * 1_000_000,
+        price_improvement_behavior: 0,
+        post_only: false as u8,
+        padding: [0u8; 6],
+    };
+    //necessary accounts for initalize ix
+    hydrate_with_mainnet(&rpc, &mut litesvm, vec![WALLET, pool]);
+    accounts = vec![];
     accounts.push(AccountMeta::new(strategy, false));
     accounts.push(AccountMeta::new(WALLET, true));
     accounts.push(AccountMeta::new_readonly(pool, false));
     accounts.push(AccountMeta::new_readonly(system_program::id(), false));
 
     let mut data: Vec<u8> = vec![0u8];
-    let initalize_params = StrategyParams {
-        quote_edge_in_bps,
-        quote_size_in_quote_atoms,
-        price_improvement_behavior,
-        post_only,
-        padding: [0u8; 6],
-    };
     data.extend_from_slice(unsafe { to_bytes(&initalize_params, 24) });
     execute_transaction(&mut litesvm, accounts, data, PROGRAM_ID).await;
+    for _ in 0..5 {
+        let price = get_price(&client).await;
 
-    //refresh accounts for claim seat ix
-    addresses = vec![
-        WALLET,
-        seat_manager,
-        seat_deposit_collector,
-        base_mint,
-        quote_mint,
-        base_vault,
-        quote_vault,
-    ];
-
-    mainnet_accounts = rpc.get_multiple_accounts(&addresses).unwrap();
-
-    for (address, maybe_account) in addresses.iter().zip(mainnet_accounts.clone().into_iter()) {
-        if let Some(account) = maybe_account {
-            litesvm.set_account(*address, account);
-        }
-    }
-    accounts = vec![];
-    accounts.push(AccountMeta::new_readonly(PHOENIX, false));
-    accounts.push(AccountMeta::new_readonly(PHOENIX_LOG_AUTH, false));
-    accounts.push(AccountMeta::new(pool, false));
-    accounts.push(AccountMeta::new(seat_manager, false));
-    accounts.push(AccountMeta::new(seat_deposit_collector, false));
-    accounts.push(AccountMeta::new_readonly(WALLET, false));
-    accounts.push(AccountMeta::new(WALLET, true));
-    accounts.push(AccountMeta::new(seat, false));
-    accounts.push(AccountMeta::new_readonly(system_program::id(), false));
-    data = vec![1u8]; //phoniex_request_seat disc
-    execute_transaction(&mut litesvm, accounts, data, PHOENIX_SEAT_MANAGER).await;
-
-    let client = Client::new();
-    for i in 0..5 {
-        let resp = client
-            .get("https://api.coinbase.com/v2/prices/SOL-USD/spot")
-            .send()
-            .await
-            .unwrap()
-            .json::<PriceData>()
-            .await
-            .unwrap();
-        let price_f64: f64 = resp.data.amount.parse().unwrap();
-        let price_u64 = (price_f64 * 1_000_000.0).round() as u64;
-
-        println!("SOL/USD Price: ${}", price_f64);
-        println!("Price in quote atoms (u64): {}", price_u64);
-        addresses = vec![
-            WALLET,
-            seat_manager,
-            seat_deposit_collector,
-            base_mint,
-            quote_mint,
-            base_vault,
-            quote_vault,
-        ];
-
-        mainnet_accounts = rpc.get_multiple_accounts(&addresses).unwrap();
-
-        for (address, maybe_account) in addresses.iter().zip(mainnet_accounts.into_iter()) {
-            if let Some(account) = maybe_account {
-                litesvm.set_account(*address, account);
-            }
-        }
-
+        println!("SOL/USD Price: ${}", price);
+        hydrate_with_mainnet(
+            &rpc,
+            &mut litesvm,
+            vec![
+                WALLET,
+                PHOENIX_LOG_AUTH,
+                strategy,
+                seat_manager,
+                seat_deposit_collector,
+                base_mint,
+                quote_mint,
+                base_vault,
+                quote_vault,
+            ],
+        );
         // ---UpdateInstruction
         accounts = vec![];
         accounts.push(AccountMeta::new(strategy, false));
@@ -231,11 +220,9 @@ async fn main() {
         accounts.push(AccountMeta::new(base_vault, false));
         accounts.push(AccountMeta::new(quote_vault, false));
         accounts.push(AccountMeta::new_readonly(spl_token::id(), false));
-
         data = vec![1u8];
-        data.extend_from_slice(&(price_u64 * 1_000_000u64).to_le_bytes()); //  fairPriceInQuoteAtomsPerRawBaseUnit: new BN(Math.floor(price * 1e6)),
+        data.extend_from_slice(&(price * 1_000_000u64).to_le_bytes());
         data.extend_from_slice(unsafe { to_bytes(&initalize_params, 24) });
         execute_transaction(&mut litesvm, accounts, data, PROGRAM_ID).await;
-        // tokio::time::sleep(order_update_delay).await;
     }
 }
