@@ -127,13 +127,12 @@ pub fn create_new_order_with_custom_token_accounts(
             &[
                 &phoniex_program,
                 &phoenix_log_authority,
-                &trader,
                 &market,
-                &seat,
-                &quote_account,
+                &trader,
                 &base_account,
-                &quote_vault,
+                &quote_account,
                 &base_vault,
+                &quote_vault,
                 &token_program,
             ],
         )
@@ -163,13 +162,13 @@ pub fn create_new_order_with_custom_token_accounts(
             &[
                 &phoniex_program,
                 &phoenix_log_authority,
-                &trader,
                 &market,
+                &trader,
                 &seat,
-                &quote_account,
                 &base_account,
-                &quote_vault,
+                &quote_account,
                 &base_vault,
+                &quote_vault,
                 &token_program,
             ],
         )

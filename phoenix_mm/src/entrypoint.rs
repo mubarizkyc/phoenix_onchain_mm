@@ -205,29 +205,13 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     // Compute quote amounts in base lots
     let size_in_quote_lots =
         phoenix_strategy.quote_size_in_quote_atoms / market_header.quote_lot_size;
-    logger.append_with_args(size_in_quote_lots, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
-    logger.append_with_args(
-        market.get_base_lots_per_base_unit(),
-        &[Argument::Precision(0)],
-    );
-    logger.log();
-    logger.clear();
-    logger.append_with_args(market.get_tick_size(), &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
-    logger.append_with_args(bid_price_in_ticks, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
-    logger.append_with_args(ask_price_in_ticks, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
+
     //size_in_base_lots=(quote_lots*base_lots+per_unit)/(price_in_ticks*tick_size);
-    let bid_size_in_base_lots =
-        size_in_quote_lots * market.get_base_lots_per_base_unit() / (bid_price_in_ticks);
-    let ask_size_in_base_lots =
-        size_in_quote_lots * market.get_base_lots_per_base_unit() / (ask_price_in_ticks);
+    let bid_size_in_base_lots = size_in_quote_lots * market.get_base_lots_per_base_unit()
+        / (bid_price_in_ticks * market.get_tick_size());
+    let ask_size_in_base_lots = size_in_quote_lots * market.get_base_lots_per_base_unit()
+        / (ask_price_in_ticks * market.get_tick_size());
+
     logger.append("Our Market: ");
     logger.log();
     logger.clear();
