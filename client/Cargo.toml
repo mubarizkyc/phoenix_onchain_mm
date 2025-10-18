@@ -18,4 +18,5 @@ serde = "1.0.219"
 reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"] }
 spl-associated-token-account = "7.0.0"
 tokio = "1.47.1"
+dotenvy = "0.15.7"
 

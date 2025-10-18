@@ -9,6 +9,6 @@ Cargo.lock
 # Solana artifacts
 *.so
 *.json
-
+*.env
 # Misc
 .DS_Store

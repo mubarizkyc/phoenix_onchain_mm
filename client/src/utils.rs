@@ -123,16 +123,14 @@ pub async fn get_price(client: &Client) -> u64 {
     let price_f64: f64 = resp.data.amount.parse().unwrap();
     (price_f64).round() as u64
 }
-pub fn register_seat(
-    litesvm: &LiteSVM,
-    bytes: &mut Vec<u8>,
-    mainnet_market_account: Account,
-) -> Account {
+pub fn add_seat_to_market(litesvm: &LiteSVM, rpc: &RpcClient, market: Pubkey) -> Account {
+    let mainnet_market_account = rpc.get_account(&market).unwrap();
+    let mut bytes = mainnet_market_account.data;
     let (market_header_bytes, _) = bytes.split_at_mut(size_of::<MarketHeader>());
     let market_size_params = deserialize_market_header(market_header_bytes)
         .unwrap()
         .market_size_params;
-    let market = deserialize_market_mut(bytes, &market_size_params).unwrap();
+    let market = deserialize_market_mut(&mut bytes, &market_size_params).unwrap();
     market.get_or_register_trader(&WALLET.to_bytes());
     let pool_account = Account {
         lamports: litesvm.minimum_balance_for_rent_exemption(bytes.len()), //size might be change after insertion

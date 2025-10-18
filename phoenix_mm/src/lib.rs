@@ -1,3 +1,4 @@
+#![allow(warnings)]
 #[cfg(not(feature = "no-entrypoint"))]
 mod entrypoint;
 pub mod types;
