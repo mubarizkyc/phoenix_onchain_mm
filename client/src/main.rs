@@ -9,10 +9,12 @@ use phoenix_mm::{
 };
 use reqwest::Client;
 use solana_client::rpc_client::RpcClient;
+use solana_sdk::pubkey;
 use solana_sdk::{
     account::{self, Account},
+    feature::create_account,
     instruction::AccountMeta,
-    pubkey::{self, Pubkey},
+    pubkey::Pubkey,
     system_program,
 };
 use spl_associated_token_account::get_associated_token_address;
@@ -30,7 +32,7 @@ async fn main() {
     let client = Client::new();
     let mut litesvm = LiteSVM::new().with_blockhash_check(true);
     let rpc = RpcClient::new("https://api.mainnet-beta.solana.com");
-    let pool = Pubkey::from_str_const("4DoNfFBfF7UokCC2FQzriy7yHK6DY6NVdYpuekQ5pRgg"); //phoenix sol-usdc pool
+    let market = Pubkey::from_str_const("4DoNfFBfF7UokCC2FQzriy7yHK6DY6NVdYpuekQ5pRgg"); //phoenix sol-usdc pool
     let base_mint = Pubkey::from_str_const("So11111111111111111111111111111111111111112"); //sol
     let quote_mint = Pubkey::from_str_const("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"); //usdc
     let base_account_address = get_associated_token_address(&WALLET, &base_mint);
@@ -49,14 +51,16 @@ async fn main() {
     )
     .0;
     let seat = Pubkey::find_program_address(
-        &[b"seat".as_ref(), pool.as_ref(), WALLET.as_ref()],
+        &[b"seat".as_ref(), market.as_ref(), WALLET.as_ref()],
         &PHOENIX,
     )
     .0;
-    let seat_manager = Pubkey::find_program_address(&[pool.as_ref()], &PHOENIX_SEAT_MANAGER).0;
-    let seat_deposit_collector =
-        Pubkey::find_program_address(&[pool.as_ref(), b"deposit".as_ref()], &PHOENIX_SEAT_MANAGER)
-            .0;
+    let seat_manager = Pubkey::find_program_address(&[market.as_ref()], &PHOENIX_SEAT_MANAGER).0;
+    let seat_deposit_collector = Pubkey::find_program_address(
+        &[market.as_ref(), b"deposit".as_ref()],
+        &PHOENIX_SEAT_MANAGER,
+    )
+    .0;
 
     //dummy token accounts
     litesvm.set_account(base_account_address, base_account);
@@ -66,108 +70,17 @@ async fn main() {
     litesvm.add_program_from_file(PROGRAM_ID, "../target/deploy/phoenix_mm.so");
     litesvm.add_program_from_file(PHOENIX, "../phoenix.so");
     litesvm.add_program_from_file(PHOENIX_SEAT_MANAGER, "../phoniex_seat_manager.so");
-    let mut accounts: Vec<AccountMeta> = vec![];
-    let mut market_account = rpc.get_account(&pool).unwrap();
-    let mut market_data: &mut Vec<u8> = market_account.data;
-    let (market_header_bytes, market_bytes) =
-        market_account.data.split_at(size_of::<MarketHeader>());
-    let market_size_params = deserialize_market_header(market_header_bytes)
-        .unwrap()
-        .market_size_params;
-    let market = deserialize_market(&market_account.data, &market_size_params).unwrap();
-    let mut registered_traders = market.get_registered_traders();
-    if !registered_traders.contains(&WALLET.to_bytes()) {
-        registered_traders
-            .insert(WALLET.to_bytes(), TraderState::default())
-            .unwrap();
-    }
-    let pool_account = Account {
-        lamports: litesvm.minimum_balance_for_rent_exemption(market_account.data.len()), //size might be change after insertion
-        data: market_account.data,
-        owner: market_account.owner,
-        executable: market_account.executable,
-        rent_epoch: market_account.rent_epoch,
-    };
-    /*
-    A special kind of manipulation to create a seat on market that is owned by seat_program + no evict of seat is needed
-              undestand how to manipulate a market data to get a seat
-            get seat_manager accounts,
-            make sure seat manager belongs to market
-        get seat manager seeds for the market
-      1:  invoke request_seat_authorized_instruction (seeds will be usefull here)
-        handlign of request seat authorized:
-          let (seat_address, bump) = get_seat_address(market_key, trader);
-        assert_with_msg(
-            &seat_address == seat.key,
-            ProgramError::InvalidAccountData,
-            "Invalid seat address",
-        )?;
-        let space = size_of::<Seat>();
-        let seeds = vec![
-            b"seat".to_vec(),
-            market_key.as_ref().to_vec(),
-            trader.as_ref().to_vec(),
-            vec![bump],
-        ];
-        create_account(
-            payer,
-            seat,
-            system_program,
-            &crate::id(),
-            &Rent::get()?,
-            space as u64,
-            seeds,
-        )?;
-        let mut seat_bytes = seat.try_borrow_mut_data()?;
-        *Seat::load_mut_bytes(&mut seat_bytes).ok_or(ProgramError::InvalidAccountData)? =
-            Seat::new_init(*market_key, *trader)?;
-             pub fn new_init(market: Pubkey, trader: Pubkey) -> Result<Self, ProgramError> {
-            Ok(Self {
-                discriminant: get_discriminant::<Seat>()?,
-                market,
-                trader,
-                approval_status: SeatApprovalStatus::NotApproved as u64,
-                _padding: [0; 6],
-            })
-        }
+    let mainnet_market_account = rpc.get_account(&market).unwrap();
+    let market_account = register_seat(
+        &litesvm,
+        &mut mainnet_market_account.data.clone(),
+        mainnet_market_account,
+    );
+    //add seat account
+    litesvm.set_account(seat, create_seat(&litesvm, market, WALLET));
+    //add market account
+    litesvm.set_account(market, market_account);
 
-        //let see what happend after this tx
-
-    2:pay double ata rent to seat deposit collector
-        3:just edit seat data to change to approved seat
-
-
-               */
-    //Request a Seat from Phoniex Seat Manager Program
-    //necessary accounts from claim seat
-    /*
-           hydrate_with_mainnet(
-            &rpc,
-            &mut litesvm,
-            vec![
-                WALLET,
-                PHOENIX_LOG_AUTH,
-                pool,
-                seat_manager,
-                seat_deposit_collector,
-                base_mint,
-                quote_mint,
-                base_vault,
-                quote_vault,
-            ],
-        );
-        let mut accounts = vec![];
-        accounts.push(AccountMeta::new_readonly(PHOENIX, false));
-        accounts.push(AccountMeta::new_readonly(PHOENIX_LOG_AUTH, false));
-        accounts.push(AccountMeta::new(pool, false));
-        accounts.push(AccountMeta::new(seat_manager, false));
-        accounts.push(AccountMeta::new(seat_deposit_collector, false));
-        accounts.push(AccountMeta::new_readonly(WALLET, false));
-        accounts.push(AccountMeta::new(WALLET, true));
-        accounts.push(AccountMeta::new(seat, false));
-        accounts.push(AccountMeta::new_readonly(system_program::id(), false));
-        execute_transaction(&mut litesvm, accounts, vec![1u8], PHOENIX_SEAT_MANAGER).await;
-    */
     // ---InitalizeInstruction---
     //inital config
     let initalize_params = StrategyParams {
@@ -178,16 +91,17 @@ async fn main() {
         padding: [0u8; 6],
     };
     //necessary accounts for initalize ix
-    hydrate_with_mainnet(&rpc, &mut litesvm, vec![WALLET, pool]);
-    accounts = vec![];
+    hydrate_with_mainnet(&rpc, &mut litesvm, vec![WALLET, market]);
+    let mut accounts = vec![];
     accounts.push(AccountMeta::new(strategy, false));
     accounts.push(AccountMeta::new(WALLET, true));
-    accounts.push(AccountMeta::new_readonly(pool, false));
+    accounts.push(AccountMeta::new_readonly(market, false));
     accounts.push(AccountMeta::new_readonly(system_program::id(), false));
 
     let mut data: Vec<u8> = vec![0u8];
     data.extend_from_slice(unsafe { to_bytes(&initalize_params, 24) });
     execute_transaction(&mut litesvm, accounts, data, PROGRAM_ID).await;
+
     for _ in 0..5 {
         let price = get_price(&client).await;
 
@@ -207,10 +121,22 @@ async fn main() {
                 quote_vault,
             ],
         );
+        //Note: I want the market data to be sycn with mainnet ,but my seat should be injected in it
+        //considering a simple case where market is owned by seat_manager and no eviction  needed
+        //add seat account
+        let mainnet_market_account = rpc.get_account(&market).unwrap();
+        litesvm.set_account(
+            market,
+            register_seat(
+                &litesvm,
+                &mut mainnet_market_account.data.clone(),
+                mainnet_market_account,
+            ),
+        );
         // ---UpdateInstruction
         accounts = vec![];
         accounts.push(AccountMeta::new(strategy, false));
-        accounts.push(AccountMeta::new(pool, false));
+        accounts.push(AccountMeta::new(market, false));
         accounts.push(AccountMeta::new(WALLET, false));
         accounts.push(AccountMeta::new_readonly(PHOENIX, false));
         accounts.push(AccountMeta::new_readonly(PHOENIX_LOG_AUTH, false));
@@ -226,3 +152,84 @@ async fn main() {
         execute_transaction(&mut litesvm, accounts, data, PROGRAM_ID).await;
     }
 }
+
+/*
+A special kind of manipulation to create a seat on market that is owned by seat_program + no evict of seat is needed
+          undestand how to manipulate a market data to get a seat
+        get seat_manager accounts,
+        make sure seat manager belongs to market
+    get seat manager seeds for the market
+  1:  invoke request_seat_authorized_instruction (seeds will be usefull here)
+    handlign of request seat authorized:
+      let (seat_address, bump) = get_seat_address(market_key, trader);
+    assert_with_msg(
+        &seat_address == seat.key,
+        ProgramError::InvalidAccountData,
+        "Invalid seat address",
+    )?;
+    let space = size_of::<Seat>();
+    let seeds = vec![
+        b"seat".to_vec(),
+        market_key.as_ref().to_vec(),
+        trader.as_ref().to_vec(),
+        vec![bump],
+    ];
+    create_account(
+        payer,
+        seat,
+        system_program,
+        &crate::id(),
+        &Rent::get()?,
+        space as u64,
+        seeds,
+    )?;
+    let mut seat_bytes = seat.try_borrow_mut_data()?;
+    *Seat::load_mut_bytes(&mut seat_bytes).ok_or(ProgramError::InvalidAccountData)? =
+        Seat::new_init(*market_key, *trader)?;
+         pub fn new_init(market: Pubkey, trader: Pubkey) -> Result<Self, ProgramError> {
+        Ok(Self {
+            discriminant: get_discriminant::<Seat>()?,
+            market,
+            trader,
+            approval_status: SeatApprovalStatus::NotApproved as u64,
+            _padding: [0; 6],
+        })
+    }
+
+    //let see what happend after this tx
+
+2:pay double ata rent to seat deposit collector
+    3:just edit seat data to change to approved seat
+
+
+           */
+//Request a Seat from Phoniex Seat Manager Program
+//necessary accounts from claim seat
+/*
+       hydrate_with_mainnet(
+        &rpc,
+        &mut litesvm,
+        vec![
+            WALLET,
+            PHOENIX_LOG_AUTH,
+            pool,
+            seat_manager,
+            seat_deposit_collector,
+            base_mint,
+            quote_mint,
+            base_vault,
+            quote_vault,
+        ],
+    );
+    let mut accounts = vec![];
+    accounts.push(AccountMeta::new_readonly(PHOENIX, false));
+    accounts.push(AccountMeta::new_readonly(PHOENIX_LOG_AUTH, false));
+    accounts.push(AccountMeta::new(pool, false));
+    accounts.push(AccountMeta::new(seat_manager, false));
+    accounts.push(AccountMeta::new(seat_deposit_collector, false));
+    accounts.push(AccountMeta::new_readonly(WALLET, false));
+    accounts.push(AccountMeta::new(WALLET, true));
+    accounts.push(AccountMeta::new(seat, false));
+    accounts.push(AccountMeta::new_readonly(system_program::id(), false));
+    execute_transaction(&mut litesvm, accounts, vec![1u8], PHOENIX_SEAT_MANAGER).await;
+*/

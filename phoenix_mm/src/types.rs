@@ -382,6 +382,30 @@ impl<
     }
 }
 
+impl<
+    MarketTraderId: Debug
+        + PartialOrd
+        + Ord
+        + Default
+        + Copy
+        + Clone
+        + Zeroable
+        + Pod
+        + BorshDeserialize
+        + BorshSerialize,
+    const BIDS_SIZE: usize,
+    const ASKS_SIZE: usize,
+    const NUM_SEATS: usize,
+> WritableMarket<MarketTraderId, FIFOOrderId, FIFORestingOrder, OrderPacket>
+    for FIFOMarket<MarketTraderId, BIDS_SIZE, ASKS_SIZE, NUM_SEATS>
+{
+    fn get_registered_traders_mut(
+        &mut self,
+    ) -> &mut dyn OrderedNodeAllocatorMap<MarketTraderId, TraderState> {
+        &mut self.traders as &mut dyn OrderedNodeAllocatorMap<MarketTraderId, TraderState>
+    }
+}
+
 pub struct MarketWrapper<'a, MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket> {
     pub inner: &'a dyn Market<MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket>,
 }
@@ -419,6 +443,49 @@ pub trait Market<
     fn get_trader_index(&self, trader: &MarketTraderId) -> Option<u32>;
     fn get_base_lots_per_base_unit(&self) -> u64;
     fn get_registered_traders(&self) -> &dyn OrderedNodeAllocatorMap<MarketTraderId, TraderState>;
+}
+pub trait WritableMarket<
+    MarketTraderId: BorshDeserialize + BorshSerialize + Copy,
+    MarketOrderId: OrderId,
+    MarketRestingOrder: RestingOrder,
+    MarketOrderPacket: OrderPacketMetadata,
+>: Market<MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket>
+{
+    fn get_registered_traders_mut(
+        &mut self,
+    ) -> &mut dyn OrderedNodeAllocatorMap<MarketTraderId, TraderState>;
+    fn get_or_register_trader(&mut self, trader: &MarketTraderId) -> Option<u32> {
+        let registered_traders = self.get_registered_traders_mut();
+        if !registered_traders.contains(trader) {
+            registered_traders.insert(*trader, TraderState::default())?;
+        }
+        self.get_trader_index(trader)
+    }
+}
+
+pub(crate) struct MarketWrapperMut<
+    'a,
+    MarketTraderId,
+    MarketOrderId,
+    MarketRestingOrder,
+    MarketOrderPacket,
+> {
+    pub inner: &'a mut dyn WritableMarket<MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket>,
+}
+
+impl<'a, MarketTraderId, MarketOrderPacket, MarketRestingOrder, MarketOrderId>
+    MarketWrapperMut<'a, MarketTraderId, MarketOrderId, MarketRestingOrder, MarketOrderPacket>
+{
+    pub(crate) fn new(
+        market: &'a mut dyn WritableMarket<
+            MarketTraderId,
+            MarketOrderId,
+            MarketRestingOrder,
+            MarketOrderPacket,
+        >,
+    ) -> Self {
+        Self { inner: market }
+    }
 }
 pub fn get_best_bid_and_ask(
     market: &dyn Market<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>,

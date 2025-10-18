@@ -14,6 +14,14 @@ pub const PHONIEX_PROGRAM_ID: [u8; 32] = [
     5, 208, 234, 79, 51, 115, 112, 19, 165, 99, 224, 147, 72, 237, 182, 244, 89, 61, 145, 252, 118,
     65, 249, 36, 124, 36, 65, 168, 66, 161, 187, 235,
 ];
+macro_rules! fifo_market_mut {
+    ($num_bids:literal, $num_asks:literal, $num_seats:literal, $bytes:expr) => {
+        FIFOMarket::<Pubkey, $num_bids, $num_asks, $num_seats>::load_mut_bytes($bytes)
+            .ok_or(ProgramError::InvalidInstructionData)?
+            as &mut dyn WritableMarket<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>
+    };
+}
+
 macro_rules! fifo_market {
     ($num_bids:literal, $num_asks:literal, $num_seats:literal, $market_bytes:expr) => {
         FIFOMarket::<Pubkey, $num_bids, $num_asks, $num_seats>::load_bytes($market_bytes)
@@ -30,10 +38,10 @@ pub fn deserialize_market_header(data: &[u8]) -> Result<MarketHeader, ProgramErr
     Ok(*header)
 }
 pub fn deserialize_market<'a>(
-    market_data: &'a [u8],
+    market_bytes: &'a [u8],
     market_size_params: &'a MarketSizeParams,
 ) -> Result<&'a dyn Market<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>, ProgramError> {
-    let (_, market_bytes) = market_data.split_at(size_of::<MarketHeader>());
+    let (_, market_bytes) = market_bytes.split_at(size_of::<MarketHeader>());
 
     let market = match (
         market_size_params.bids_size,
@@ -58,6 +66,39 @@ pub fn deserialize_market<'a>(
         }
     };
     Ok(MarketWrapper::<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>::new(market).inner)
+}
+pub fn deserialize_market_mut<'a>(
+    market_bytes: &'a mut [u8],
+    market_size_params: &'a MarketSizeParams,
+) -> Result<
+    &'a mut dyn WritableMarket<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>,
+    ProgramError,
+> {
+    let (_, market_bytes) = market_bytes.split_at_mut(size_of::<MarketHeader>());
+
+    let market = match (
+        market_size_params.bids_size,
+        market_size_params.asks_size,
+        market_size_params.num_seats,
+    ) {
+        (512, 512, 128) => fifo_market_mut!(512, 512, 128, market_bytes),
+        (512, 512, 1025) => fifo_market_mut!(512, 512, 1025, market_bytes),
+        (512, 512, 1153) => fifo_market_mut!(512, 512, 1153, market_bytes),
+        (1024, 1024, 128) => fifo_market_mut!(1024, 1024, 128, market_bytes),
+        (1024, 1024, 2049) => fifo_market_mut!(1024, 1024, 2049, market_bytes),
+        (1024, 1024, 2177) => fifo_market_mut!(1024, 1024, 2177, market_bytes),
+        (2048, 2048, 128) => fifo_market_mut!(2048, 2048, 128, market_bytes),
+        (2048, 2048, 4097) => fifo_market_mut!(2048, 2048, 4097, market_bytes),
+        (2048, 2048, 4225) => fifo_market_mut!(2048, 2048, 4225, market_bytes),
+        (4096, 4096, 128) => fifo_market_mut!(4096, 4096, 128, market_bytes),
+        (4096, 4096, 8193) => fifo_market_mut!(4096, 4096, 8193, market_bytes),
+        (4096, 4096, 8321) => fifo_market_mut!(4096, 4096, 8321, market_bytes),
+        _ => {
+            //    phoenix_log!("Invalid parameters for market");
+            return Err(ProgramError::InvalidInstructionData);
+        }
+    };
+    Ok(MarketWrapperMut::<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>::new(market).inner)
 }
 pub fn create_cancel_multiple_orders_by_id_with_free_funds_instruction(
     phoniex_program: &AccountInfo,
