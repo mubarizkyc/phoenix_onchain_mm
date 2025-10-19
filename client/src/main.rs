@@ -3,26 +3,17 @@ pub mod utils;
 use std::{env, vec};
 
 use crate::utils::*;
-use dotenvy::{dotenv, dotenv_override};
+use dotenvy::dotenv;
 use litesvm::LiteSVM;
-use phoenix_mm::{
-    types::*,
-    utils::{deserialize_market, deserialize_market_header},
-};
+use phoenix_mm::types::*;
 use reqwest::{
     Client,
-    header::{HeaderMap, HeaderValue, ORIGIN},
+    header::{HeaderMap, HeaderValue},
 };
 use solana_client::rpc_client::{RpcClient, RpcClientConfig};
 use solana_rpc_client::http_sender::HttpSender;
-use solana_sdk::{
-    account::{self, Account},
-    feature::create_account,
-    instruction::AccountMeta,
-    pubkey::Pubkey,
-    system_program,
-};
-use solana_sdk::{entrypoint::HEAP_LENGTH, pubkey};
+use solana_sdk::pubkey;
+use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey, system_program};
 use spl_associated_token_account::get_associated_token_address;
 const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("6RavfKEf7qqJLXmmwUWVBkaN56pZ71JtqCFfS99bHrpu");
 const PHOENIX: Pubkey = pubkey!("PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY");
@@ -96,10 +87,10 @@ async fn main() {
     // ---InitalizeInstruction---
     //inital config
     let initalize_params = StrategyParams {
-        quote_edge_in_bps: 0,
+        quote_edge_in_bps: 2,
         quote_size_in_quote_atoms: 500 * 1_000_000,
-        price_improvement_behavior: 0,
-        post_only: false as u8,
+        price_improvement_behavior: 2,
+        post_only: 0,
         padding: [0u8; 6],
     };
     //necessary accounts for initalize ix
@@ -114,9 +105,9 @@ async fn main() {
     data.extend_from_slice(unsafe { to_bytes(&initalize_params, 24) });
     execute_transaction(&mut litesvm, accounts, data, PROGRAM_ID).await;
 
-    for _ in 0..5 {
+    for i in 0..3 {
         let price = get_price(&price_fetch_client).await;
-
+        println!("Update No: ${}", i);
         println!("SOL/USD Price: ${}", price);
         hydrate_with_mainnet(
             &rpc,

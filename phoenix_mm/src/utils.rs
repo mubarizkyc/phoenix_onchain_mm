@@ -6,6 +6,7 @@ use pinocchio::{
     cpi::slice_invoke,
     instruction::{AccountMeta, Instruction},
     msg,
+    program::get_return_data,
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -28,6 +29,30 @@ macro_rules! fifo_market {
             .ok_or(ProgramError::InvalidInstructionData)?
             as &dyn Market<Pubkey, FIFOOrderId, FIFORestingOrder, OrderPacket>
     };
+}
+
+pub fn parse_order_ids_from_return_data(
+    order_ids: &mut Vec<FIFOOrderId>,
+) -> Result<(), ProgramError> {
+    if let Some((return_data)) = get_return_data() {
+        msg!("Found return data");
+        if *return_data.program_id() == PHONIEX_PROGRAM_ID && !return_data.is_empty() {
+            msg!("Found orders in return data");
+
+            for chunk in return_data.chunks_exact(16) {
+                // Read 8 bytes each
+                let price_in_ticks = u64::from_le_bytes(chunk[0..8].try_into().unwrap());
+                let order_sequence_number = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
+                order_ids.push(FIFOOrderId::new_from_untyped(
+                    price_in_ticks,
+                    order_sequence_number,
+                ))
+            }
+        } else {
+            msg!("No orders in return data");
+        }
+    }
+    Ok(())
 }
 pub fn deserialize_market_header(data: &[u8]) -> Result<MarketHeader, ProgramError> {
     let header = bytemuck::try_from_bytes::<MarketHeader>(data).map_err(|_| {
@@ -128,6 +153,7 @@ pub fn create_cancel_multiple_orders_by_id_with_free_funds_instruction(
         &[&phoniex_program, &phoenix_log_authority, &trader, &market],
     )
 }
+
 pub fn create_new_order_with_custom_token_accounts(
     phoniex_program: &AccountInfo,
     market: &AccountInfo,

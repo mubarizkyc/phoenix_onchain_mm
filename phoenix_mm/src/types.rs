@@ -4,6 +4,13 @@ use core::fmt::Debug;
 use pinocchio::pubkey::Pubkey;
 use sokoban::node_allocator::{OrderedNodeAllocatorMap, ZeroCopy};
 use sokoban::{RedBlackTree, SENTINEL};
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct DeserializedFIFOOrderId {
+    pub price_in_ticks: u64,
+    pub order_sequence_number: u64,
+}
+
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct MarketSizeParams {

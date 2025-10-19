@@ -1,36 +1,26 @@
 use crate::*;
 use anyhow::{Error, Result};
-use bytemuck::{Pod, Zeroable};
-use core::num;
 use litesvm::LiteSVM;
 use phoenix_mm::types::*;
 use phoenix_mm::utils::*;
 use reqwest::Client;
 use serde::Deserialize;
-use solana_client::rpc_client;
 use solana_client::rpc_client::RpcClient;
-use solana_sdk::client;
 use solana_sdk::{
     account::Account,
     instruction::{AccountMeta, Instruction},
     keccak,
     message::v0::Message,
     program_pack::Pack,
-    pubkey,
     pubkey::Pubkey,
     signature::Keypair,
-    signer::{EncodableKey, Signer},
+    signer::EncodableKey,
     system_program,
-    sysvar::{Sysvar, clock::Clock},
     transaction::VersionedTransaction,
 };
-use spl_associated_token_account::{
-    get_associated_token_address, get_associated_token_address_with_program_id,
-};
+
 use spl_token::state::Account as TokenAccount;
-use std::collections::BTreeMap;
-use std::marker;
-use std::time::Duration;
+
 //Coin base api structure
 #[derive(Deserialize, Debug)]
 pub struct PriceData {

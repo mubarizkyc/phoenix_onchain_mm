@@ -1,8 +1,12 @@
 #![allow(unexpected_cfgs)]
 use crate::types::*;
 use crate::utils::*;
-use pinocchio_log::logger::{Argument, Log, Logger};
+use pinocchio_log::{
+    log,
+    logger::{Argument, Log, Logger},
+};
 use pinocchio_system::instructions::CreateAccount;
+use pinocchio_token::state::TokenAccount;
 //use crate::instruction::{self, MyProgramInstruction};
 use bytemuck::checked::try_from_bytes;
 use pinocchio::{
@@ -10,7 +14,7 @@ use pinocchio::{
     account_info::AccountInfo,
     default_allocator,
     instruction::{Seed, Signer},
-    msg, program_entrypoint,
+    program_entrypoint,
     program_error::ProgramError,
     pubkey::Pubkey,
     pubkey::find_program_address,
@@ -33,13 +37,13 @@ fn process_instruction(
 
     match ix_disc {
         0 => {
-            msg!("Ix:0");
+            log!("Initalize");
 
             initialize(accounts, instruction_data)?;
             Ok(())
         }
         1 => {
-            msg!("Ix:1");
+            log!("Update Quotes");
             update_quotes(accounts, instruction_data)?;
 
             Ok(())
@@ -47,7 +51,6 @@ fn process_instruction(
         _ => return Err(ProgramError::InvalidInstructionData),
     }
 }
-pub static PHOENIX_STRATEGY_SEED: &[u8] = b"phoenix_strategy";
 /*
 create a strategy account that will save our bot config
 */
@@ -84,7 +87,7 @@ pub fn initialize(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
 
     let bump = [bump];
     let seeds = [
-        Seed::from(PHOENIX_STRATEGY_SEED),
+        Seed::from(b"phoenix_strategy"),
         Seed::from(user.key().as_ref()),
         Seed::from(&bump),
     ];
@@ -171,17 +174,9 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     // Returns the best bid and ask prices that are not placed by the trader
     let trader_index = market.get_trader_index(user.key()).unwrap_or(u32::MAX) as u64;
     let (best_bid, best_ask) = get_best_bid_and_ask(market, trader_index);
-    logger.append("Current Market: ");
-    logger.log();
-    logger.clear();
-    logger.append("Best Bid: ");
-    logger.append_with_args(best_bid, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
-    logger.append("Best Ask: ");
-    logger.append_with_args(best_ask, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
+    log!("Current Market");
+    log!("Best Bid: {}", best_bid);
+    log!("Best Ask: {}", best_ask);
 
     let price_improvement_behavior =
         PriceImprovementBehavior::from_u8(phoenix_strategy.price_improvement_behavior);
@@ -212,23 +207,14 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     let ask_size_in_base_lots = size_in_quote_lots * market.get_base_lots_per_base_unit()
         / (ask_price_in_ticks * market.get_tick_size());
 
-    logger.append("Our Market: ");
-    logger.log();
-    logger.clear();
-    logger.append_with_args(bid_size_in_base_lots, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
-    logger.append_with_args(bid_price_in_ticks, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
-    logger.append_with_args(ask_price_in_ticks, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
-    logger.append_with_args(ask_size_in_base_lots, &[Argument::Precision(0)]);
-    logger.log();
-    logger.clear();
-    let mut update_bid = true;
+    log!("Our Market");
+    log!("bid_size_in_base_lots: {}", bid_size_in_base_lots);
+    log!("bid_price_in_ticks: {}", bid_price_in_ticks);
+    log!("ask_price_in_ticks: {}", ask_price_in_ticks);
+    log!("ask_size_in_base_lots: {}", ask_size_in_base_lots);
+    let mut update_bid = true; //wether new order is allowed or not 
     let mut update_ask = true;
+    //decide which existing orders shoulde be cancel or kept before posting new ones
     let orders_to_cancel = [
         (
             Side::Bid,
@@ -256,6 +242,11 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
             if resting_order.num_base_lots == *initial_size
                 && order_id.price_in_ticks.inner == *price
             {
+                log!(
+                    "Resting Order is indentical: {}",
+                    order_id.order_sequence_number
+                );
+
                 match side {
                     Side::Bid => update_bid = false,
                     Side::Ask => update_ask = false,
@@ -263,17 +254,17 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
                 return None;
             }
             // The order has been partially filled or reduced
-            logger.append("Found partially filled resting order with sequence number: ");
-            logger.append_with_args(order_id.order_sequence_number, &[Argument::Precision(0)]);
-            logger.log();
-            logger.clear();
+            log!(
+                "Found Paritally filled resting order: {}",
+                order_id.order_sequence_number
+            );
             return Some(*order_id);
         }
-        logger.append("Failed to found resting order with sequence number: ");
-        logger.append_with_args(order_id.order_sequence_number, &[Argument::Precision(0)]);
-        logger.log();
-        logger.clear();
-        // The order has been fully filled
+        log!(
+            "resting order not found: {}",
+            order_id.order_sequence_number
+        );
+        // The order has been fully filled /cancelled ,or the traders dosnet have any orders on the markt
         None
     })
     .collect::<Vec<FIFOOrderId>>();
@@ -282,7 +273,8 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     drop(market_data);
     // Cancel the old orders
     if !orders_to_cancel.is_empty() {
-        //cpi to create_cancel_multiple_orders_by_id_with_free_funds_instruction
+        log!("create_cancel_multiple_orders_by_id_with_free_funds");
+
         let params = &CancelMultipleOrdersByIdParams {
             orders: orders_to_cancel
                 .iter()
@@ -304,13 +296,13 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     // Don't update quotes if the price is invalid or if the sizes are 0
     update_bid &= bid_price_in_ticks > 1 && bid_size_in_base_lots > 0;
     update_ask &= ask_price_in_ticks < u64::MAX && ask_size_in_base_lots > 0;
-    let client_order_id = u128::from_le_bytes(accounts[2].key()[..16].try_into().unwrap());
+    let client_order_id = u128::from_le_bytes(user.key()[..16].try_into().unwrap());
 
     if !update_ask && !update_bid && orders_to_cancel.is_empty() {
-        msg!("No orders to update");
+        log!("No orders to update");
         return Ok(());
     }
-    let order_ids: Vec<FIFOOrderId> = vec![];
+    let mut order_ids: Vec<FIFOOrderId> = vec![];
     if phoenix_strategy.post_only == 1
         || !matches!(price_improvement_behavior, PriceImprovementBehavior::Join)
     {
@@ -335,7 +327,7 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
             Some(client_order_id),
             false,
         );
-        msg!("cpi to place multipule post only orders");
+        log!("place multipule post only orders");
         //cpi to place multipule post only orders
         create_new_multiple_order_with_custom_token_accounts(
             phoenix_program,
@@ -350,9 +342,10 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
             token_program,
             &multiple_order_packet,
         )?;
+        parse_order_ids_from_return_data(&mut order_ids)?;
     } else {
         if update_bid {
-            msg!("update bid and create_new_order_with_custom_token_accounts");
+            log!("update bid and create_new_order_with_custom_token_accounts");
             create_new_order_with_custom_token_accounts(
                 phoenix_program,
                 pool,
@@ -371,9 +364,10 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
                     client_order_id,
                 ),
             )?;
+            parse_order_ids_from_return_data(&mut order_ids)?;
         }
         if update_ask {
-            msg!("update ask and create_new_order_with_custom_token_accounts");
+            log!("update ask and create_new_order_with_custom_token_accounts");
             create_new_order_with_custom_token_accounts(
                 phoenix_program,
                 pool,
@@ -392,40 +386,45 @@ pub fn update_quotes(accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
                     client_order_id,
                 ),
             )?;
+            parse_order_ids_from_return_data(&mut order_ids)?;
         }
     }
 
-    let market_data = pool.try_borrow_data()?;
-    let market = deserialize_market(&market_data, &market_header.market_size_params)?;
-
+    let market_data_2 = pool.try_borrow_data()?;
+    let market_2 = deserialize_market(&market_data_2, &market_header.market_size_params)?;
     for order_id in order_ids.iter() {
-        if let Some(order) = market
-            .get_book(Side::from_order_sequence_number(
-                order_id.order_sequence_number,
-            ))
-            .get(order_id)
-        {
-            match Side::from_order_sequence_number(order_id.order_sequence_number) {
+        let side = Side::from_order_sequence_number(order_id.order_sequence_number);
+        if let Some(order) = market_2.get_book(side).get(order_id) {
+            match side {
                 Side::Ask => {
                     phoenix_strategy.ask_price_in_ticks = order_id.price_in_ticks.inner;
                     phoenix_strategy.ask_order_sequence_number = order_id.order_sequence_number;
                     phoenix_strategy.initial_ask_size_in_base_lots = order.num_base_lots;
-                    msg!("Placed Ask Order with sequence number: ");
+                    log!("Placed Ask Order: {}", order_id.order_sequence_number);
                 }
                 Side::Bid => {
                     phoenix_strategy.bid_price_in_ticks = order_id.price_in_ticks.inner;
                     phoenix_strategy.bid_order_sequence_number = order_id.order_sequence_number;
                     phoenix_strategy.initial_bid_size_in_base_lots = order.num_base_lots;
-                    msg!("Placed Ask Order with sequence number: ");
+                    log!("Placed Bid Order: {}", order_id.order_sequence_number);
                 }
             }
         } else {
-            msg!("Order not found ");
+            log!("Order not found ");
         }
-        logger.append_with_args(order_id.order_sequence_number, &[Argument::Precision(0)]);
-        logger.log();
-        logger.clear()
     }
+    log!(
+        "Base Balance: {}",
+        TokenAccount::from_account_info(base_account)
+            .unwrap()
+            .amount()
+    );
+    log!(
+        "Quote Balance: {}",
+        TokenAccount::from_account_info(quote_account)
+            .unwrap()
+            .amount()
+    );
 
     Ok(())
 }
